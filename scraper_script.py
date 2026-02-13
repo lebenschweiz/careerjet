@@ -1,44 +1,141 @@
-import requests
-from bs4 import BeautifulSoup
+from flask import Flask, render_template_string
 import json
-import random
-from datetime import datetime
+import os
 
-SEARCH_QUERY = "Software Entwickler"
-LOCATION = "Schweiz"
-USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-]
+app = Flask(__name__)
 
-def scrape():
-    headers = {"User-Agent": random.choice(USER_AGENTS)}
-    url = "https://www.careerjet.ch/search/results.html"
-    params = {"s": SEARCH_QUERY, "l": LOCATION, "sort": "date"}
+# Pfad zur Datendatei, die von der GitHub Action erstellt wird
+JOBS_FILE = "jobs.json"
+
+def load_jobs_from_json():
+    """Lädt die Jobdaten aus der lokalen JSON-Datei."""
+    if os.path.exists(JOBS_FILE):
+        try:
+            with open(JOBS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"Fehler beim Lesen der JSON: {e}")
+            return []
+    return []
+
+@app.route('/')
+def index():
+    """Hauptseite der App, die Daten aus der JSON anzeigt."""
+    jobs = load_jobs_from_json()
     
-    try:
-        response = requests.get(url, params=params, headers=headers, timeout=20)
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.text, 'html.parser')
-            jobs = []
-            for item in soup.select('article.job, .job'):
-                title_el = item.select_one('h2 a, .title a')
-                if title_el:
-                    link = title_el['href']
-                    if link.startswith('/'): link = "https://www.careerjet.ch" + link
-                    jobs.append({
-                        "title": title_el.get_text(strip=True),
-                        "link": link,
-                        "company": item.select_one('.company_name, .company').get_text(strip=True) if item.select_one('.company_name, .company') else "Unbekannt",
-                        "location": item.select_one('.location').get_text(strip=True) if item.select_one('.location') else "Schweiz",
-                        "scraped_at": datetime.now().strftime("%d.%m.%Y %H:%M")
-                    })
-            
-            with open('jobs.json', 'w', encoding='utf-8') as f:
-                json.dump(jobs, f, ensure_ascii=False, indent=4)
-            print(f"Erfolg: {len(jobs)} Jobs gespeichert.")
-    except Exception as e:
-        print(f"Fehler: {e}")
+    # Zeitstempel der Datei auslesen für die Anzeige
+    last_update = "Unbekannt"
+    if os.path.exists(JOBS_FILE):
+        try:
+            import datetime
+            mtime = os.path.getmtime(JOBS_FILE)
+            last_update = datetime.datetime.fromtimestamp(mtime).strftime('%d.%m.%Y %H:%M:%S')
+        except:
+            last_update = "Datei vorhanden, Zeit unbekannt"
+
+    html_template = """
+    <!DOCTYPE html>
+    <html lang="de">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Job-Radar Schweiz (Offline-First)</title>
+        <style>
+            :root { 
+                --primary: #cc0000; 
+                --bg: #f1f5f9; 
+                --text: #0f172a; 
+            }
+            body { 
+                font-family: 'Inter', system-ui, sans-serif; 
+                background: var(--bg); 
+                color: var(--text); 
+                margin: 0;
+                padding: 20px; 
+            }
+            .container { max-width: 800px; margin: 0 auto; }
+            header { 
+                background: var(--primary); 
+                color: white; 
+                padding: 25px; 
+                border-radius: 12px; 
+                text-align: center; 
+                margin-bottom: 25px;
+            }
+            .update-tag {
+                font-size: 0.75rem;
+                background: rgba(0,0,0,0.2);
+                padding: 4px 10px;
+                border-radius: 20px;
+                display: inline-block;
+                margin-top: 10px;
+            }
+            .job-card { 
+                background: white; 
+                padding: 20px; 
+                margin-bottom: 15px; 
+                border-radius: 10px; 
+                box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+                border-left: 5px solid var(--primary);
+            }
+            .title { 
+                font-size: 1.2rem; 
+                font-weight: bold; 
+                color: #2563eb; 
+                text-decoration: none; 
+            }
+            .meta { 
+                font-size: 0.85rem; 
+                color: #64748b; 
+                margin: 8px 0;
+            }
+            .btn { 
+                display: inline-block; 
+                margin-top: 10px; 
+                padding: 8px 16px; 
+                background: var(--primary); 
+                color: white; 
+                text-decoration: none; 
+                border-radius: 6px;
+                font-size: 0.9rem;
+            }
+            .empty-state {
+                text-align: center;
+                background: white;
+                padding: 50px;
+                border-radius: 12px;
+                border: 2px dashed #cbd5e1;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <header>
+                <h1>🇨🇭 Job-Radar Schweiz</h1>
+                <div class="update-tag">Letztes Update: {{ last_update }}</div>
+            </header>
+
+            {% if jobs %}
+                {% for job in jobs %}
+                <div class="job-card">
+                    <a href="{{ job.url }}" target="_blank" class="title">{{ job.title }}</a>
+                    <div class="meta">🏢 {{ job.company }} | 📍 {{ job.location }}</div>
+                    <a href="{{ job.url }}" target="_blank" class="btn">Stelle öffnen</a>
+                </div>
+                {% endfor %}
+            {% else %}
+                <div class="empty-state">
+                    <h3>Keine Daten in jobs.json gefunden</h3>
+                    <p>Die Datei ist entweder leer oder wurde noch nicht von GitHub Actions generiert.</p>
+                </div>
+            {% endif %}
+        </div>
+    </body>
+    </html>
+    """
+    return render_template_string(html_template, jobs=jobs, last_update=last_update)
 
 if __name__ == "__main__":
-    scrape()
+    # Render nutzt den Port aus der Umgebungsvariable PORT
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
