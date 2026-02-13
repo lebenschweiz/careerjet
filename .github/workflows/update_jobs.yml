@@ -1,0 +1,32 @@
+name: Update Jobs JSON
+
+on:
+  schedule:
+    - cron: '0 8 * * *' # Täglich um 08:00 Uhr
+  workflow_dispatch: # Ermöglicht manuelles Starten über GitHub UI
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install Dependencies
+        run: pip install requests beautifulsoup4
+
+      - name: Run Scraper Script
+        run: python scraper_script.py
+
+      - name: Commit and Push Changes
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add jobs.json
+          git commit -m "Auto-update jobs.json" || exit 0
+          git push
