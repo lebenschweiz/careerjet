@@ -6,118 +6,128 @@ import os
 app = Flask(__name__)
 
 # --- KONFIGURATION ---
-# Hier kannst du deine Suche anpassen
 SEARCH_QUERY = "Software Entwickler"
-LOCATION = "Zürich"
+LOCATION = "Schweiz"
 
-def get_jobs_via_scraping():
-    # Careerjet Such-URL
-    url = f"https://www.careerjet.ch/ws/suche/l/s.html?s={SEARCH_QUERY}&l={LOCATION}"
-    
-    # Wichtig: Ein echter User-Agent simuliert einen normalen Browser
+def get_jobs():
+    """
+    Robuster Scraper für Careerjet.
+    Versucht mehrere URLs, um Blockaden oder 404-Fehler zu umgehen.
+    """
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept-Language": "de-CH,de;q=0.9,en;q=0.8"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+        "Accept-Language": "de-CH,de;q=0.9,en-US;q=0.8,en;q=0.7"
     }
+    
+    # Liste möglicher Such-URLs (Careerjet ändert diese manchmal)
+    urls_to_try = [
+        # Methode 1: Moderne Suche
+        {
+            "url": "https://www.careerjet.ch/search/results.html",
+            "params": {"s": SEARCH_QUERY, "l": LOCATION, "sort": "date"}
+        },
+        # Methode 2: Klassische WS-Suche (Fallback)
+        {
+            "url": "https://www.careerjet.ch/ws/suche/l/s.html",
+            "params": {"s": SEARCH_QUERY, "l": LOCATION}
+        }
+    ]
 
-    try:
-        response = requests.get(url, headers=headers, timeout=15)
-        response.raise_for_status()
-        
-        soup = BeautifulSoup(response.text, 'html.parser')
-        job_list = []
-        
-        # Careerjet Struktur (Stand heute)
-        # Wir suchen nach allen Artikel-Elementen mit der Klasse 'job'
-        articles = soup.select('article.job')
+    for attempt in urls_to_try:
+        try:
+            print(f"Versuche URL: {attempt['url']}")
+            response = requests.get(attempt['url'], params=attempt['params'], headers=headers, timeout=15)
+            
+            if response.status_code == 200:
+                # Erfolg! Parsing starten
+                soup = BeautifulSoup(response.text, 'html.parser')
+                jobs = []
+                
+                # Wir suchen breit nach Job-Artikeln
+                job_listings = soup.select('article.job, .job, .job-display')
 
-        for article in articles:
-            # Titel und Link extrahieren
-            title_link = article.select_one('header h2 a')
-            if not title_link: continue
+                for item in job_listings:
+                    title_el = item.select_one('h2 a, .title a, a.job-title')
+                    comp_el = item.select_one('.company_name, .company')
+                    loc_el = item.select_one('.location')
+                    desc_el = item.select_one('.desc, .description, .job-snippet')
+                    
+                    if title_el:
+                        title = title_el.get_text(strip=True)
+                        link = title_el['href']
+                        if link.startswith('/'):
+                            link = "https://www.careerjet.ch" + link
+                        
+                        jobs.append({
+                            "title": title,
+                            "link": link,
+                            "company": comp_el.get_text(strip=True) if comp_el else "Firma unbekannt",
+                            "location": loc_el.get_text(strip=True) if loc_el else "Schweiz",
+                            "description": desc_el.get_text(strip=True) if desc_el else "Klicken für Details..."
+                        })
+                
+                if jobs:
+                    return jobs
             
-            title = title_link.get_text(strip=True)
-            link = title_link['href']
-            if link.startswith('/'):
-                link = "https://www.careerjet.ch" + link
-            
-            # Firma extrahieren
-            company = article.select_one('.company_name')
-            company_text = company.get_text(strip=True) if company else "Nicht angegeben"
-            
-            # Ort extrahieren
-            location = article.select_one('.location')
-            location_text = location.get_text(strip=True) if location else "Schweiz"
-            
-            # Beschreibung extrahieren (Snippet)
-            description = article.select_one('.desc')
-            description_text = description.get_text(strip=True) if description else "Keine Kurzbeschreibung verfügbar."
+        except Exception as e:
+            print(f"Fehler bei Versuch {attempt['url']}: {e}")
+            continue # Probiere nächste URL
 
-            job_list.append({
-                "title": title,
-                "link": link,
-                "company": company_text,
-                "location": location_text,
-                "description": description_text
-            })
-            
-        return job_list
-    except Exception as e:
-        print(f"Scraping Fehler: {e}")
-        return []
+    return [] # Nichts gefunden
 
 @app.route('/')
 def index():
-    jobs = get_jobs_via_scraping()
+    jobs = get_jobs()
     
-    html_template = """
+    html = """
     <!DOCTYPE html>
     <html lang="de">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Mein Job Radar</title>
+        <title>Job Radar Schweiz</title>
         <style>
-            body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f0f2f5; margin: 0; padding: 20px; color: #333; }
-            .container { max-width: 900px; margin: 0 auto; }
-            .header { text-align: center; padding: 40px 0; background: #cc0000; color: white; border-radius: 12px; margin-bottom: 30px; }
-            .job-card { background: white; border-radius: 10px; padding: 25px; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); transition: transform 0.2s; }
-            .job-card:hover { transform: translateY(-3px); box-shadow: 0 6px 12px rgba(0,0,0,0.1); }
-            .job-title { color: #cc0000; font-size: 1.4em; font-weight: bold; text-decoration: none; display: block; }
-            .job-meta { margin: 10px 0; font-size: 0.9em; color: #666; font-weight: 600; }
-            .job-desc { line-height: 1.6; color: #444; margin-bottom: 15px; }
-            .btn { display: inline-block; background: #cc0000; color: white; padding: 10px 20px; border-radius: 6px; text-decoration: none; font-weight: bold; }
-            .footer { text-align: center; font-size: 0.8em; color: #999; margin-top: 50px; }
+            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f0f2f5; margin: 0; padding: 20px; color: #333; }
+            .container { max-width: 800px; margin: 0 auto; }
+            .header { background: #d32f2f; color: white; padding: 30px; border-radius: 12px; text-align: center; margin-bottom: 30px; }
+            .job-card { background: white; border-radius: 8px; padding: 20px; margin-bottom: 15px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); border-left: 5px solid #d32f2f; transition: transform 0.2s; }
+            .job-card:hover { transform: translateY(-2px); box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+            .title { color: #d32f2f; font-size: 1.25rem; font-weight: bold; text-decoration: none; display: block; margin-bottom: 5px; }
+            .meta { font-size: 0.9rem; color: #666; margin-bottom: 10px; font-weight: 500; }
+            .desc { font-size: 0.95rem; color: #444; line-height: 1.5; }
+            .no-jobs { background: white; padding: 40px; text-align: center; border-radius: 8px; color: #666; }
+            .btn { display: inline-block; background: #d32f2f; color: white; padding: 8px 16px; border-radius: 4px; text-decoration: none; font-size: 0.9rem; margin-top: 10px; }
         </style>
     </head>
     <body>
         <div class="container">
             <div class="header">
-                <h1>🚀 Job-Radar Schweiz</h1>
-                <p>Aktuelle Stellen live von Careerjet</p>
+                <h1>🇨🇭 Job-Radar</h1>
+                <p>Live Scraper für Careerjet</p>
             </div>
             
-            {% if not jobs %}
-            <div class="job-card">
-                <p>Momentan konnten keine Jobs geladen werden. Bitte versuche es in wenigen Minuten erneut.</p>
-            </div>
+            {% if jobs %}
+                {% for job in jobs %}
+                <div class="job-card">
+                    <a href="{{ job.link }}" target="_blank" class="title">{{ job.title }}</a>
+                    <div class="meta">🏢 {{ job.company }} &nbsp;|&nbsp; 📍 {{ job.location }}</div>
+                    <div class="desc">{{ job.description }}</div>
+                    <a href="{{ job.link }}" target="_blank" class="btn">Zum Inserat</a>
+                </div>
+                {% endfor %}
+            {% else %}
+                <div class="no-jobs">
+                    <h3>Keine Ergebnisse gefunden</h3>
+                    <p>Entweder gibt es keine passenden Stellen, oder Careerjet blockiert die Anfrage momentan.</p>
+                </div>
             {% endif %}
-
-            {% for job in jobs %}
-            <div class="job-card">
-                <a href="{{ job.link }}" target="_blank" class="job-title">{{ job.title }}</a>
-                <div class="job-meta">🏢 {{ job.company }} | 📍 {{ job.location }}</div>
-                <div class="job-desc">{{ job.description }}</div>
-                <a href="{{ job.link }}" target="_blank" class="btn">Details anzeigen</a>
-            </div>
-            {% endfor %}
             
-            <div class="footer">Datenquelle: Careerjet.ch Scraper</div>
+            <p style="text-align: center; color: #999; font-size: 0.8rem; margin-top: 40px;">Datenquelle: Careerjet.ch</p>
         </div>
     </body>
     </html>
     """
-    return render_template_string(html_template, jobs=jobs)
+    return render_template_string(html, jobs=jobs)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
